@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ByteCoin - Wallets, Txns & Mining</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 10px; background: #0b1220; color: #e6eef8; }
+        h1 { text-align:center; }
+        .col { display:flex; gap:12px; flex-wrap:wrap; }
+        .card { background:#0f2130; padding:12px; border-radius:10px; flex:1 1 300px; box-shadow:0 6px 14px rgba(0,0,0,0.6); }
+        input, button, textarea { width:100%; padding:8px; margin-top:8px; border-radius:6px; border:none; box-sizing:border-box; }
+        input { background:#071826; color:#e6eef8; }
+        button { background:#ffd166; color:#081021; font-weight:700; cursor:pointer; padding:10px; }
+        .muted { color:#9fb3c8; font-size:13px; }
+        .small { font-size:12px; color:#9fb3c8; }
+        #blocks { max-height:300px; overflow:auto; }
+        .tx { background:#071826; padding:8px; margin-bottom:8px; border-radius:8px; }
+    </style>
+</head>
+<body>
+    <h1>🚀 ByteCoin — Wallets · Transactions · Mining</h1>
+
+    <div class="col">
+        <div class="card">
+            <h3>Create Wallet</h3>
+            <button id="createWalletBtn">Create New Wallet</button>
+            <p class="small">Created wallets are shown below (private key returned on creation — save it!).</p>
+            <div id="createdWallet" class="small muted"></div>
+        </div>
+
+        <div class="card">
+            <h3>Wallets</h3>
+            <div id="walletsList" class="small muted">Loading...</div>
+        </div>
+
+        <div class="card">
+            <h3>Make Transaction</h3>
+            <input id="tx_from" placeholder="From address (exact)">
+            <input id="tx_priv" placeholder="From private key">
+            <input id="tx_to" placeholder="To address">
+            <input id="tx_amount" placeholder="Amount (e.g. 12.5)">
+            <button id="createTxBtn">Create Transaction</button>
+            <div id="txStatus" class="small muted"></div>
+        </div>
+
+        <div class="card">
+            <h3>Mine Pending Transactions</h3>
+            <input id="miner_addr" placeholder="Miner address (must exist or will be auto-created)">
+            <button id="mineBtn">Mine Block</button>
+            <div id="mineStatus" class="small muted"></div>
+            <p class="small">Current reward: <span id="curReward">-</span> | Difficulty: <span id="diff">-</span></p>
+        </div>
+    </div>
+
+    <div style="height:12px"></div>
+
+    <div class="col">
+        <div class="card">
+            <h3>Pending Mempool</h3>
+            <div id="mempool"></div>
+        </div>
+
+        <div class="card">
+            <h3>Recent Blocks</h3>
+            <div id="blocks"></div>
+        </div>
+
+        <div class="card">
+            <h3>Check Balance</h3>
+            <input id="bal_addr" placeholder="Address">
+            <button id="checkBalBtn">Check Balance</button>
+            <div id="balRes" class="small muted"></div>
+        </div>
+    </div>
+
+<script>
+async function fetchJSON(path, opts){ let r = await fetch(path, opts); return r.json(); }
+
+async function loadChainUI(){
+    let data = await fetchJSON('/api/chain');
+    document.getElementById('curReward').innerText = parseFloat(data.current_reward).toFixed(4);
+    document.getElementById('diff').innerText = data.difficulty;
+    // blocks
+    let blocksDiv = document.getElementById('blocks');
+    blocksDiv.innerHTML = '';
+    let blocks = data.chain.slice().reverse();
+    for(let b of blocks){
+        let d = new Date(b.timestamp*1000);
+        let el = document.createElement('div');
+        el.className='tx';
+        el.innerHTML = `<b>#${b.index}</b> <span class="small">${d.toLocaleString()}</span><br>
+                        Reward: ${b.reward} | Nonce: ${b.nonce}<br>
+                        TXs: ${b.transactions.length}<br>
+                        Hash: ${b.hash.substring(0,28)}...`;
+        blocksDiv.appendChild(el);
+    }
+}
+
+async function loadMempool(){
+    let data = await fetchJSON('/api/mempool');
+    let div = document.getElementById('mempool');
+    div.innerHTML = '';
+    if(data.mempool.length===0){ div.innerHTML = '<div class="small muted">No pending txs</div>'; return; }
+    for(let tx of data.mempool){
+        let el = document.createElement('div');
+        el.className='tx';
+        el.innerHTML = `<b>TX</b> ${tx.txid}<br>
+                        ${tx.from} → ${tx.to} : ${tx.amount} ByteCoin<br>
+                        <span class="small">${new Date(tx.timestamp*1000).toLocaleString()}</span>`;
+        div.appendChild(el);
+    }
+}
+
+async function loadWallets(){
+    let data = await fetchJSON('/api/wallets');
+    let div = document.getElementById('walletsList');
+    div.innerHTML = '';
+    if(data.wallets.length===0){ div.innerHTML = '<div class="small muted">No wallets</div>'; return; }
+    data.wallets.forEach(w=>{
+        let el = document.createElement('div');
+        el.className='small muted';
+        el.innerHTML = `<b>${w.address}</b> — ${w.balance} ByteCoin`;
+        div.appendChild(el);
+    });
+}
+
+document.getElementById('createWalletBtn').onclick = async () => {
+    let res = await fetchJSON('/api/wallet/create', {method:'POST'});
+    document.getElementById('createdWallet').innerText = `Address: ${res.address}  |  Private: ${res.private} (SAVE THIS!!)`;
+    await loadWallets();
+};
+
+document.getElementById('createTxBtn').onclick = async () => {
+    let from = document.getElementById('tx_from').value.trim();
+    let priv = document.getElementById('tx_priv').value.trim();
+    let to = document.getElementById('tx_to').value.trim();
+    let amt = document.getElementById('tx_amount').value.trim();
+    document.getElementById('txStatus').innerText = 'Creating transaction...';
+    let res = await fetchJSON('/api/create_tx', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({from, to, amount:amt, private:priv})
+    });
+    if(res.success){
+        document.getElementById('txStatus').innerText = 'Transaction added to mempool: ' + res.tx.txid;
+    } else {
+        document.getElementById('txStatus').innerText = 'Failed: ' + (res.reason || 'unknown');
+    }
+    await loadMempool();
+    await loadWallets();
+};
+
+document.getElementById('mineBtn').onclick = async () => {
+    let miner = document.getElementById('miner_addr').value.trim();
+    if(!miner){ document.getElementById('mineStatus').innerText = 'Enter miner address'; return; }
+    document.getElementById('mineStatus').innerText = 'Mining (server-side)...';
+    let res = await fetchJSON('/api/mine', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({miner})
+    });
+    if(res.success){
+        document.getElementById('mineStatus').innerText = `Mined block #${res.block.index} — reward ${res.block.reward} ByteCoin. Applied TXs: ${res.applied}`;
+    } else {
+        document.getElementById('mineStatus').innerText = 'Mine failed: ' + (res.reason || 'unknown');
+    }
+    await loadChainUI();
+    await loadMempool();
+    await loadWallets();
+};
+
+document.getElementById('checkBalBtn').onclick = async () => {
+    let addr = document.getElementById('bal_addr').value.trim();
+    if(!addr) return;
+    let res = await fetchJSON('/api/balance/' + encodeURIComponent(addr));
+    document.getElementById('balRes').innerText = `${res.address} — Confirmed: ${res.balance} | Available: ${res.available}`;
+};
+
+async function refreshAll(){
+    await loadChainUI();
+    await loadMempool();
+    await loadWallets();
+}
+
+setInterval(refreshAll, 3000);
+refreshAll();
+</script>
+</body>
+</html>
